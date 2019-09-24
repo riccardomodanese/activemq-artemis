@@ -22,6 +22,7 @@ import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManager;
 import javax.net.ssl.TrustManagerFactory;
+
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
@@ -44,8 +45,10 @@ import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslContextBuilder;
 import io.netty.handler.ssl.SslProvider;
 import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
+
 import org.apache.activemq.artemis.core.remoting.impl.netty.TransportConstants;
 import org.apache.activemq.artemis.utils.ClassloadingUtil;
+import org.jboss.logging.Logger;
 
 /**
  * Please note, this class supports PKCS#11 keystores, but there are no specific tests in the ActiveMQ Artemis test-suite to
@@ -54,6 +57,9 @@ import org.apache.activemq.artemis.utils.ClassloadingUtil;
  * null keystore path.
  */
 public class SSLSupport {
+
+   private static final Logger logger = Logger.getLogger(SSLSupport.class);
+
    private String keystoreProvider = TransportConstants.DEFAULT_KEYSTORE_PROVIDER;
    private String keystorePath = TransportConstants.DEFAULT_KEYSTORE_PATH;
    private String keystorePassword = TransportConstants.DEFAULT_KEYSTORE_PASSWORD;
@@ -63,6 +69,34 @@ public class SSLSupport {
    private String crlPath = TransportConstants.DEFAULT_CRL_PATH;
    private String sslProvider = TransportConstants.DEFAULT_SSL_PROVIDER;
    private boolean trustAll = TransportConstants.DEFAULT_TRUST_ALL;
+
+   private final String trustManagerFactoryClassName;
+
+   public SSLSupport() {
+      trustManagerFactoryClassName = loadTrustManagerClassName();
+      logger.infov("Trust manager read {0}", new Object[] {trustManagerFactoryClassName});
+   }
+
+   private String loadTrustManagerClassName() {
+      String className = "org.apache.activemq.artemis.core.remoting.impl.ssl.CustomTrustManagerFactory";
+      //TODO get from configuration?
+//      String className = System.getProperty("TRUST_MANAGER_CUSTOM_FACTORY_CLASS_NAME");
+      return className;
+   }
+
+   private TrustManagerFactory initTrustManagerFactoryInstance() {
+      TrustManagerFactory tmp = null;
+         try {
+            logger.infov("Loading x509 trust manager factory {0}...", new Object[] {trustManagerFactoryClassName});
+            tmp = (TrustManagerFactory)Class.forName(trustManagerFactoryClassName).newInstance();
+            logger.infov("Loading x509 trust manager factory {0}... DONE", new Object[] {trustManagerFactoryClassName});
+         }
+         catch (LinkageError | IllegalAccessException | InstantiationException | ClassNotFoundException e) {
+            //throw runtime exception or fallback to "standard" ssl trustmanager?
+            throw new RuntimeException(String.format("Cannot initialize custom Trust manager '{0}'. Please check configuration!", new Object[] {trustManagerFactoryClassName}));
+         }
+      return tmp;
+   }
 
    public String getKeystoreProvider() {
       return keystoreProvider;
@@ -193,6 +227,9 @@ public class SSLSupport {
       if (trustAll) {
          //This is useful for testing but not should be used outside of that purpose
          return InsecureTrustManagerFactory.INSTANCE;
+      } else if (trustManagerFactoryClassName != null && trustManagerFactoryClassName.trim().length()>0) {
+         //create custom trust manager if configured
+         return initTrustManagerFactoryInstance();
       } else if (truststorePath == null && (truststoreProvider == null || !"PKCS11".equals(truststoreProvider.toUpperCase()))) {
          return null;
       } else {
@@ -269,6 +306,7 @@ public class SSLSupport {
       return factory.getKeyManagers();
    }
 
+   //adapt this code like done for the trust manager
    private KeyManagerFactory loadKeyManagerFactory() throws Exception {
       if (keystorePath == null && (keystoreProvider == null || !"PKCS11".equals(keystoreProvider.toUpperCase()))) {
          return null;
